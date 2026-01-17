@@ -209,6 +209,8 @@ Disable revocation checks (default):
   "revocationMode": "NoCheck"
 }
 
+---
+
 ## Output format
 
 The Lambda returns JSON including:
@@ -233,7 +235,7 @@ CloudWatch logs will include:
 
 ---
 
-## Notes about TLS “handshake step detail”
+## Notes about TLS "handshake step detail"
 
 This Lambda reports coarse-grained TLS handshake steps:
 
@@ -284,7 +286,6 @@ This repository includes a dedicated console runner:
 Build everything:
 
 ```bash
-### From Base ###
 dotnet build .\src\Horacio-TLS-Lambda.Local\Horacio-TLS-Lambda.Local.csproj -c Release```
 
 Run the local runner (SystemTrust / public CAs):
