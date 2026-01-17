@@ -208,6 +208,7 @@ Disable revocation checks (default):
   "url": "https://example.com",
   "revocationMode": "NoCheck"
 }
+```
 
 ---
 
@@ -286,7 +287,8 @@ This repository includes a dedicated console runner:
 Build everything:
 
 ```bash
-dotnet build .\src\Horacio-TLS-Lambda.Local\Horacio-TLS-Lambda.Local.csproj -c Release```
+dotnet build .\src\Horacio-TLS-Lambda.Local\Horacio-TLS-Lambda.Local.csproj -c Release
+```
 
 Run the local runner (SystemTrust / public CAs):
 
