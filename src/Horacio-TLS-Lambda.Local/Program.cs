@@ -13,6 +13,10 @@ public static class Program
         // Minimal CLI parser (no external dependencies)
         var parsed = ParseArgs(args);
 
+        // JSON output is disabled by default for local runs.
+        // Enable it only when explicitly requested via --json.
+        bool showJson = parsed.ContainsKey("json");
+
         // URL can be passed as the first positional argument:
         // dotnet run --project ... -- "https://example.com"
         //
@@ -57,13 +61,17 @@ public static class Program
 
         var fn = new Function();
         var result = await fn.FunctionHandler(request, new LocalLambdaContext());
-
-        Console.WriteLine();
-        Console.WriteLine("===== JSON Output =====");
-        Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
+        
+        if (showJson)
         {
-            WriteIndented = true
-        }));
+            Console.WriteLine();
+            Console.WriteLine("===== JSON Output =====");
+            Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
+            {
+                 WriteIndented = true
+            }));
+}
+
     }
 
     private static string ReadTextFileOrThrow(string path)

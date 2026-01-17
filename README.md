@@ -354,3 +354,16 @@ Make sure Amazon.Lambda.Tools is installed and your global tool path is present 
 
 Pull requests and improvements are welcome.
 Please ensure changes are compatible with .NET 8 and AWS Lambda runtime constraints.
+
+---
+
+## Local runner JSON output
+
+By default, the local runner does **NOT** print the full JSON output (to keep the terminal output readable).
+
+To enable JSON output, add `--json`:
+
+```bash
+dotnet run --project ./src/Horacio-TLS-Lambda.Local/Horacio-TLS-Lambda.Local.csproj -c Release -- "https://example.com" --json
+```
+
