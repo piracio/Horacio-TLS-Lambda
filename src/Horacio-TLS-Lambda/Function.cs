@@ -1050,7 +1050,7 @@ public class Function
         public double TlsStart, TlsEnd;
         public double TtfbStart, TtfbEnd;
         public double TransferStart, TransferEnd;
-        public double TotalStart, TotalEnd;
+        public double TotalStart = Stopwatch.GetTimestamp(), TotalEnd = Stopwatch.GetTimestamp();
 
         public double TlsCreateStreamStart, TlsCreateStreamEnd;
         public double TlsAuthStart, TlsAuthEnd;
