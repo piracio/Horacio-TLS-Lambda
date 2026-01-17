@@ -1,0 +1,54 @@
+# =========================
+# .NET / Visual Studio
+# =========================
+bin/
+obj/
+[Bb]uild/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa]ny [Cc]PU/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Visual Studio Code
+.vscode/
+.history/
+
+# Rider / JetBrains
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# =========================
+# AWS Lambda tooling outputs
+# =========================
+aws-lambda-tools-defaults.local.json
+*.zip
+*.tmp
+
+# =========================
+# Test / coverage
+# =========================
+TestResults/
+*.trx
+coverage/
+coverage.xml
+*.coverage
+*.coveragexml
+
+# =========================
+# Misc
+# =========================
+*.swp
+*.bak
+*.orig
