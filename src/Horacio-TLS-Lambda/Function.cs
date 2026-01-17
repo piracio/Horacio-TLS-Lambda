@@ -2,12 +2,13 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
-using System.Security.Cryptography; // Needed for AsnEncodedData
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -60,25 +61,25 @@ public class Response
     [JsonPropertyName("timingsMs")]
     public Timings TimingsMs { get; set; } = new();
 
-    // Waterfall offsets (start/end) in ms from time zero.
     [JsonPropertyName("waterfall")]
     public Waterfall Waterfall { get; set; } = new();
 
     [JsonPropertyName("tlsDetails")]
     public TlsDetails? TlsDetails { get; set; }
 
-    // ASCII waterfall intended for CloudWatch logs.
     [JsonPropertyName("asciiWaterfall")]
     public string AsciiWaterfall { get; set; } = "";
 
-    // List of warnings (phase durations > 1000 ms)
     [JsonPropertyName("warnings")]
     public List<string> Warnings { get; set; } = new();
+
+    // If the request fails before a status code is read, this will contain a short error.
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
 }
 
 public class Timings
 {
-    // Phase durations in milliseconds
     [JsonPropertyName("dns")]
     public double Dns { get; set; }
 
@@ -88,13 +89,13 @@ public class Timings
     [JsonPropertyName("tlsHandshake")]
     public double TlsHandshake { get; set; }
 
-    // Net TTFB: "time to headers" minus DNS/TCP/TLS
-    [JsonPropertyName("ttfbNet")]
-    public double TtfbNet { get; set; }
-
-    // Raw time to headers (includes DNS/TCP/TLS)
+    // Time to end-of-headers (raw includes DNS/TCP/TLS)
     [JsonPropertyName("ttfbRaw")]
     public double TtfbRaw { get; set; }
+
+    // Approx net TTFB = raw - (dns + tcp + tls)
+    [JsonPropertyName("ttfbNet")]
+    public double TtfbNet { get; set; }
 
     [JsonPropertyName("transfer")]
     public double Transfer { get; set; }
@@ -102,7 +103,7 @@ public class Timings
     [JsonPropertyName("total")]
     public double Total { get; set; }
 
-    // Coarse-grained TLS internal steps (not packet-level TLS message timings)
+    // Coarse TLS internal steps
     [JsonPropertyName("tlsCreateSslStream")]
     public double TlsCreateSslStream { get; set; }
 
@@ -115,8 +116,6 @@ public class Timings
 
 public class Waterfall
 {
-    // Offsets are expressed in milliseconds since start (0 ms).
-
     [JsonPropertyName("dnsStart")] public double DnsStart { get; set; }
     [JsonPropertyName("dnsEnd")] public double DnsEnd { get; set; }
 
@@ -138,59 +137,31 @@ public class Waterfall
 
 public class TlsDetails
 {
-    [JsonPropertyName("protocol")]
-    public string? Protocol { get; set; }
+    [JsonPropertyName("protocol")] public string? Protocol { get; set; }
+    [JsonPropertyName("alpn")] public string? Alpn { get; set; }
 
-    [JsonPropertyName("alpn")]
-    public string? Alpn { get; set; }
+    [JsonPropertyName("cipherAlgorithm")] public string? CipherAlgorithm { get; set; }
+    [JsonPropertyName("cipherStrength")] public int CipherStrength { get; set; }
 
-    [JsonPropertyName("cipherAlgorithm")]
-    public string? CipherAlgorithm { get; set; }
+    [JsonPropertyName("hashAlgorithm")] public string? HashAlgorithm { get; set; }
+    [JsonPropertyName("hashStrength")] public int HashStrength { get; set; }
 
-    [JsonPropertyName("cipherStrength")]
-    public int CipherStrength { get; set; }
+    [JsonPropertyName("keyExchangeAlgorithm")] public string? KeyExchangeAlgorithm { get; set; }
+    [JsonPropertyName("keyExchangeStrength")] public int KeyExchangeStrength { get; set; }
 
-    [JsonPropertyName("hashAlgorithm")]
-    public string? HashAlgorithm { get; set; }
+    [JsonPropertyName("remoteCertSubject")] public string? RemoteCertSubject { get; set; }
+    [JsonPropertyName("remoteCertIssuer")] public string? RemoteCertIssuer { get; set; }
+    [JsonPropertyName("remoteCertThumbprint")] public string? RemoteCertThumbprint { get; set; }
+    [JsonPropertyName("remoteCertNotBefore")] public string? RemoteCertNotBefore { get; set; }
+    [JsonPropertyName("remoteCertNotAfter")] public string? RemoteCertNotAfter { get; set; }
 
-    [JsonPropertyName("hashStrength")]
-    public int HashStrength { get; set; }
+    [JsonPropertyName("remoteCertSans")] public List<string> RemoteCertSans { get; set; } = new();
 
-    [JsonPropertyName("keyExchangeAlgorithm")]
-    public string? KeyExchangeAlgorithm { get; set; }
+    [JsonPropertyName("chainElements")] public int ChainElements { get; set; }
+    [JsonPropertyName("chainStatus")] public List<string> ChainStatus { get; set; } = new();
 
-    [JsonPropertyName("keyExchangeStrength")]
-    public int KeyExchangeStrength { get; set; }
-
-    [JsonPropertyName("remoteCertSubject")]
-    public string? RemoteCertSubject { get; set; }
-
-    [JsonPropertyName("remoteCertIssuer")]
-    public string? RemoteCertIssuer { get; set; }
-
-    [JsonPropertyName("remoteCertThumbprint")]
-    public string? RemoteCertThumbprint { get; set; }
-
-    [JsonPropertyName("remoteCertNotBefore")]
-    public string? RemoteCertNotBefore { get; set; }
-
-    [JsonPropertyName("remoteCertNotAfter")]
-    public string? RemoteCertNotAfter { get; set; }
-
-    [JsonPropertyName("remoteCertSans")]
-    public List<string> RemoteCertSans { get; set; } = new();
-
-    [JsonPropertyName("chainElements")]
-    public int ChainElements { get; set; }
-
-    [JsonPropertyName("chainStatus")]
-    public List<string> ChainStatus { get; set; } = new();
-
-    [JsonPropertyName("policyErrors")]
-    public string? PolicyErrors { get; set; }
-
-    [JsonPropertyName("validationMode")]
-    public string ValidationMode { get; set; } = "SystemTrust";
+    [JsonPropertyName("policyErrors")] public string? PolicyErrors { get; set; }
+    [JsonPropertyName("validationMode")] public string ValidationMode { get; set; } = "SystemTrust";
 }
 
 // -------------------------
@@ -210,78 +181,75 @@ public class Function
         if (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
             throw new ArgumentException("Only http/https schemes are supported.");
 
-        using var cts = new CancellationTokenSource(input.TimeoutMs);
+        // Default ports
+        int port = uri.Port > 0 ? uri.Port : (uri.Scheme == Uri.UriSchemeHttps ? 443 : 80);
 
-        // Parse optional PEM inputs.
-        // Root CAs are used as trust anchors; intermediates are used for chain completion.
+        using var cts = new CancellationTokenSource(input.TimeoutMs);
+        var ct = cts.Token;
+
         var rootPool = BuildCertCollectionFromPem(input.CaRootPem, "caRootPem");
         var intermediatePool = BuildCertCollectionFromPem(input.IntermediatePem, "intermediatePem");
 
         var t = new TimingCollector();
-        var baseSw = Stopwatch.StartNew();
+        var sw0 = Stopwatch.StartNew();
 
-        // We instrument DNS/TCP/TLS by taking control of the connection establishment.
-        var handler = new SocketsHttpHandler
+        var response = new Response
         {
-            AllowAutoRedirect = false,
-            AutomaticDecompression = DecompressionMethods.All,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            Url = input.Url
+        };
 
-            ConnectCallback = async (ctx, ct) =>
+        try
+        {
+            // -------------------------
+            // DNS
+            // -------------------------
+            t.DnsStart = sw0.Elapsed.TotalMilliseconds;
+            var dnsSw = Stopwatch.StartNew();
+            IPAddress[] ips = await Dns.GetHostAddressesAsync(uri.Host, ct).ConfigureAwait(false);
+            dnsSw.Stop();
+
+            t.DnsMs = dnsSw.Elapsed.TotalMilliseconds;
+            t.DnsEnd = sw0.Elapsed.TotalMilliseconds;
+
+            if (ips.Length == 0)
+                throw new SocketException((int)SocketError.HostNotFound);
+
+            var chosen = ChooseIp(ips);
+
+            // -------------------------
+            // TCP
+            // -------------------------
+            t.TcpStart = sw0.Elapsed.TotalMilliseconds;
+
+            var sock = new Socket(chosen.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
             {
-                var host = ctx.DnsEndPoint.Host;
-                var port = ctx.DnsEndPoint.Port;
+                NoDelay = true
+            };
 
-                // DNS resolution
-                t.DnsStart = baseSw.Elapsed.TotalMilliseconds;
-                var dnsSw = Stopwatch.StartNew();
-                IPAddress[] ips = await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false);
-                dnsSw.Stop();
-                t.DnsMs = dnsSw.Elapsed.TotalMilliseconds;
-                t.DnsEnd = baseSw.Elapsed.TotalMilliseconds;
+            var tcpSw = Stopwatch.StartNew();
+            await sock.ConnectAsync(new IPEndPoint(chosen, port), ct).ConfigureAwait(false);
+            tcpSw.Stop();
 
-                if (ips.Length == 0)
-                    throw new SocketException((int)SocketError.HostNotFound);
+            t.TcpMs = tcpSw.Elapsed.TotalMilliseconds;
+            t.TcpEnd = sw0.Elapsed.TotalMilliseconds;
 
-                var chosen = ChooseIp(ips);
+            await using var netStream = new NetworkStream(sock, ownsSocket: true);
 
-                // TCP connect
-                t.TcpStart = baseSw.Elapsed.TotalMilliseconds;
+            Stream ioStream = netStream;
 
-                var sock = new Socket(chosen.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
-                {
-                    NoDelay = true
-                };
+            // -------------------------
+            // TLS (HTTPS only)
+            // -------------------------
+            if (uri.Scheme == Uri.UriSchemeHttps)
+            {
+                t.TlsStart = sw0.Elapsed.TotalMilliseconds;
 
-                var tcpSw = Stopwatch.StartNew();
-                await sock.ConnectAsync(new IPEndPoint(chosen, port), ct).ConfigureAwait(false);
-                tcpSw.Stop();
-                t.TcpMs = tcpSw.Elapsed.TotalMilliseconds;
-                t.TcpEnd = baseSw.Elapsed.TotalMilliseconds;
-
-                var netStream = new NetworkStream(sock, ownsSocket: true);
-
-                // If the scheme is HTTP (no TLS), return the raw network stream.
-                if (uri.Scheme == Uri.UriSchemeHttp)
-                {
-                    t.TlsMs = 0;
-                    t.TlsStart = t.TlsEnd = baseSw.Elapsed.TotalMilliseconds;
-                    t.TlsValidationMode = "None(HTTP)";
-                    return netStream;
-                }
-
-                // TLS handshake (coarse timing)
-                t.TlsStart = baseSw.Elapsed.TotalMilliseconds;
-
-                // Step 1: Create SslStream
-                t.TlsCreateStreamStart = baseSw.Elapsed.TotalMilliseconds;
+                t.TlsCreateStreamStart = sw0.Elapsed.TotalMilliseconds;
 
                 RemoteCertificateValidationCallback certCb = (sender, certificate, chain, sslPolicyErrors) =>
                 {
                     t.TlsPolicyErrors = sslPolicyErrors.ToString();
 
-                    // Capture chain status as seen by the platform (when available).
-                    // Note: 'chain' can be null in some edge cases.
                     if (chain != null)
                     {
                         t.PlatformChainElements = chain.ChainElements?.Count ?? 0;
@@ -290,32 +258,28 @@ public class Function
                             .ToList();
                     }
 
-                    // If no custom root CA is provided, use the system trust store validation.
+                    // System trust store path
                     if (rootPool == null || rootPool.Count == 0)
                     {
                         t.TlsValidationMode = "SystemTrust";
                         return sslPolicyErrors == SslPolicyErrors.None;
                     }
 
+                    // Custom root trust path
                     t.TlsValidationMode = "CustomRootTrust";
 
                     if (certificate is null)
                         return false;
 
                     using var customChain = new X509Chain();
-
-                    // In Lambda environments, CRL/OCSP checks can add latency or fail due to networking constraints.
                     customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
                     customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
 
-                    // Anchor chain building to a custom root store.
                     customChain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
                     customChain.ChainPolicy.CustomTrustStore.Clear();
-
                     foreach (var root in rootPool)
                         customChain.ChainPolicy.CustomTrustStore.Add(root);
 
-                    // Add intermediates to ExtraStore to help build the chain if the server does not provide them.
                     if (intermediatePool != null && intermediatePool.Count > 0)
                     {
                         foreach (var inter in intermediatePool)
@@ -325,13 +289,12 @@ public class Function
                     var serverCert = new X509Certificate2(certificate);
                     bool ok = customChain.Build(serverCert);
 
-                    // Capture custom chain diagnostics.
                     t.CustomChainElements = customChain.ChainElements?.Count ?? 0;
                     t.CustomChainStatus = customChain.ChainStatus
                         .Select(s => $"{s.Status}: {s.StatusInformation?.Trim()}")
                         .ToList();
 
-                    // Enforce hostname validation: if the platform reported a name mismatch, fail.
+                    // Enforce hostname validation.
                     if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
                         ok = false;
 
@@ -339,36 +302,28 @@ public class Function
                 };
 
                 var sslStream = new SslStream(netStream, leaveInnerStreamOpen: false, certCb);
-                t.TlsCreateStreamEnd = baseSw.Elapsed.TotalMilliseconds;
+                t.TlsCreateStreamEnd = sw0.Elapsed.TotalMilliseconds;
 
-                // Step 2: Authenticate (this is the handshake)
-                t.TlsAuthStart = baseSw.Elapsed.TotalMilliseconds;
-
+                t.TlsAuthStart = sw0.Elapsed.TotalMilliseconds;
                 var tlsSw = Stopwatch.StartNew();
+
+                // Manual HTTPS: force HTTP/1.1 semantics by not negotiating h2.
+                // ALPN is optional; omitting it avoids h2 negotiation entirely.
                 await sslStream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
                 {
-                    TargetHost = host,
+                    TargetHost = uri.Host,
                     EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-
-                    // ALPN hint: attempt HTTP/2, then HTTP/1.1.
-                    ApplicationProtocols = new List<SslApplicationProtocol>
-                    {
-                        SslApplicationProtocol.Http2,
-                        SslApplicationProtocol.Http11
-                    }
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck
                 }, ct).ConfigureAwait(false);
+
                 tlsSw.Stop();
+                t.TlsAuthEnd = sw0.Elapsed.TotalMilliseconds;
 
-                t.TlsAuthEnd = baseSw.Elapsed.TotalMilliseconds;
-
-                // Step 3: Post-handshake inspection
-                t.TlsPostInfoStart = baseSw.Elapsed.TotalMilliseconds;
+                t.TlsPostInfoStart = sw0.Elapsed.TotalMilliseconds;
 
                 t.TlsMs = tlsSw.Elapsed.TotalMilliseconds;
-                t.TlsEnd = baseSw.Elapsed.TotalMilliseconds;
+                t.TlsEnd = sw0.Elapsed.TotalMilliseconds;
 
-                // Capture negotiated TLS properties.
                 t.NegotiatedProtocol = sslStream.SslProtocol.ToString();
                 t.CipherAlgorithm = sslStream.CipherAlgorithm.ToString();
                 t.CipherStrength = sslStream.CipherStrength;
@@ -379,7 +334,7 @@ public class Function
                 t.KeyExchangeAlgorithm = sslStream.KeyExchangeAlgorithm.ToString();
                 t.KeyExchangeStrength = sslStream.KeyExchangeStrength;
 
-                // FIX: ALPN is ReadOnlyMemory<byte>, not a nullable reference type.
+                // ALPN may be empty when not negotiated.
                 var alpnMem = sslStream.NegotiatedApplicationProtocol.Protocol;
                 t.Alpn = alpnMem.IsEmpty ? "" : Encoding.ASCII.GetString(alpnMem.Span);
 
@@ -394,133 +349,431 @@ public class Function
                     t.RemoteCertSans = ExtractSubjectAlternativeNames(remote);
                 }
 
-                t.TlsPostInfoEnd = baseSw.Elapsed.TotalMilliseconds;
+                t.TlsPostInfoEnd = sw0.Elapsed.TotalMilliseconds;
 
-                return sslStream;
+                ioStream = sslStream;
             }
-        };
-
-        using var client = new HttpClient(handler)
-        {
-            // We use CancellationTokenSource for timeouts to keep timing consistent.
-            Timeout = Timeout.InfiniteTimeSpan
-        };
-
-        using var req = new HttpRequestMessage(new HttpMethod(input.Method ?? "GET"), uri);
-
-        // TTFB is measured as "time to response headers".
-        t.TotalStart = 0;
-        t.TtfbStart = baseSw.Elapsed.TotalMilliseconds;
-
-        var ttfbSw = Stopwatch.StartNew();
-        using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
-                                     .ConfigureAwait(false);
-        ttfbSw.Stop();
-
-        t.TtfbEnd = baseSw.Elapsed.TotalMilliseconds;
-
-        // Raw TTFB includes DNS/TCP/TLS.
-        var rawTtfb = ttfbSw.Elapsed.TotalMilliseconds;
-
-        // Net TTFB attempts to isolate server/proxy latency by subtracting DNS/TCP/TLS setup time.
-        t.TtfbRawMs = rawTtfb;
-        t.TtfbNetMs = Math.Max(0, rawTtfb - (t.DnsMs + t.TcpMs + t.TlsMs));
-
-        // Transfer: read the full response body to measure download time.
-        t.TransferStart = baseSw.Elapsed.TotalMilliseconds;
-
-        var transferSw = Stopwatch.StartNew();
-        long bytes = 0;
-
-        await using (var stream = await resp.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false))
-        {
-            byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-            try
+            else
             {
+                // HTTP path
+                t.TlsValidationMode = "None(HTTP)";
+                t.TlsStart = t.TlsEnd = sw0.Elapsed.TotalMilliseconds;
+                t.TlsMs = 0;
+            }
+
+            // -------------------------
+            // HTTP request / response (manual HTTP/1.1)
+            // -------------------------
+            string method = string.IsNullOrWhiteSpace(input.Method) ? "GET" : input.Method.Trim().ToUpperInvariant();
+            string pathAndQuery = string.IsNullOrWhiteSpace(uri.PathAndQuery) ? "/" : uri.PathAndQuery;
+
+            // For GET, do not send a body.
+            // If you need POST bodies later, extend this safely.
+            var requestText =
+                $"{method} {pathAndQuery} HTTP/1.1\r\n" +
+                $"Host: {uri.Host}\r\n" +
+                "User-Agent: Horacio-TLS-Lambda/1.0\r\n" +
+                "Accept: */*\r\n" +
+                "Connection: close\r\n" +
+                "\r\n";
+
+            byte[] reqBytes = Encoding.ASCII.GetBytes(requestText);
+
+            // TTFB: we measure until we have the full HTTP headers (end of header marker).
+            t.TtfbStart = sw0.Elapsed.TotalMilliseconds;
+
+            // Write request
+            await ioStream.WriteAsync(reqBytes, 0, reqBytes.Length, ct).ConfigureAwait(false);
+            await ioStream.FlushAsync(ct).ConfigureAwait(false);
+
+            // Read response headers
+            var headerReadSw = Stopwatch.StartNew();
+            var (statusCode, headers, headerBytes) = await ReadHeadersAsync(ioStream, ct).ConfigureAwait(false);
+            headerReadSw.Stop();
+
+            t.TtfbEnd = sw0.Elapsed.TotalMilliseconds;
+            t.TtfbRawMs = headerReadSw.Elapsed.TotalMilliseconds;
+
+            // Net TTFB approximation
+            t.TtfbNetMs = Math.Max(0, t.TtfbRawMs - (t.DnsMs + t.TcpMs + t.TlsMs));
+
+            response.StatusCode = statusCode;
+
+            // Transfer: read the body
+            t.TransferStart = sw0.Elapsed.TotalMilliseconds;
+            var transferSw = Stopwatch.StartNew();
+
+            long bytesRead = 0;
+
+            if (headers.TryGetValue("transfer-encoding", out var te) &&
+                te.IndexOf("chunked", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                bytesRead = await ReadChunkedBodyAsync(ioStream, ct).ConfigureAwait(false);
+            }
+            else if (headers.TryGetValue("content-length", out var cl) &&
+                     long.TryParse(cl.Trim(), out var contentLen) &&
+                     contentLen >= 0)
+            {
+                bytesRead = await ReadFixedLengthBodyAsync(ioStream, contentLen, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                // No content-length and not chunked: read to EOF.
+                bytesRead = await ReadToEofAsync(ioStream, ct).ConfigureAwait(false);
+            }
+
+            transferSw.Stop();
+            t.TransferMs = transferSw.Elapsed.TotalMilliseconds;
+            t.TransferEnd = sw0.Elapsed.TotalMilliseconds;
+
+            response.BytesRead = bytesRead;
+
+            sw0.Stop();
+            t.TotalMs = sw0.Elapsed.TotalMilliseconds;
+            t.TotalEnd = t.TotalMs;
+
+            var tlsStep = BuildTlsStepTimings(t);
+
+            response.TimingsMs = new Timings
+            {
+                Dns = RoundMs(t.DnsMs),
+                TcpConnect = RoundMs(t.TcpMs),
+                TlsHandshake = RoundMs(t.TlsMs),
+                TtfbRaw = RoundMs(t.TtfbRawMs),
+                TtfbNet = RoundMs(t.TtfbNetMs),
+                Transfer = RoundMs(t.TransferMs),
+                Total = RoundMs(t.TotalMs),
+
+                TlsCreateSslStream = RoundMs(tlsStep.CreateSslStreamMs),
+                TlsAuthenticateHandshake = RoundMs(tlsStep.AuthenticateMs),
+                TlsPostHandshakeInspection = RoundMs(tlsStep.PostHandshakeMs)
+            };
+
+            response.Waterfall = new Waterfall
+            {
+                DnsStart = RoundMs(t.DnsStart),
+                DnsEnd = RoundMs(t.DnsEnd),
+                TcpStart = RoundMs(t.TcpStart),
+                TcpEnd = RoundMs(t.TcpEnd),
+                TlsStart = RoundMs(t.TlsStart),
+                TlsEnd = RoundMs(t.TlsEnd),
+                TtfbStart = RoundMs(t.TtfbStart),
+                TtfbEnd = RoundMs(t.TtfbEnd),
+                TransferStart = RoundMs(t.TransferStart),
+                TransferEnd = RoundMs(t.TransferEnd),
+                TotalStart = 0,
+                TotalEnd = RoundMs(t.TotalEnd)
+            };
+
+            response.TlsDetails = BuildTlsDetails(t);
+            response.AsciiWaterfall = AsciiWaterfallAligned(response.Waterfall);
+            response.Warnings = BuildWarnings(response.TimingsMs);
+
+            // Logs
+            context.Logger.LogLine($"URL: {input.Url}");
+            context.Logger.LogLine($"HTTP {response.StatusCode} | Bytes: {response.BytesRead}");
+
+            if (response.TlsDetails != null)
+                LogTlsDetails(context, response.TlsDetails, response.TimingsMs);
+
+            context.Logger.LogLine(response.AsciiWaterfall);
+            foreach (var w in response.Warnings) context.Logger.LogLine(w);
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            sw0.Stop();
+            t.TotalMs = sw0.Elapsed.TotalMilliseconds;
+            t.TotalEnd = t.TotalMs;
+
+            // Return partial diagnostics with an error string.
+            response.Error = $"{ex.GetType().Name}: {ex.Message}";
+
+            response.TimingsMs = new Timings
+            {
+                Dns = RoundMs(t.DnsMs),
+                TcpConnect = RoundMs(t.TcpMs),
+                TlsHandshake = RoundMs(t.TlsMs),
+                TtfbRaw = RoundMs(t.TtfbRawMs),
+                TtfbNet = RoundMs(t.TtfbNetMs),
+                Transfer = RoundMs(t.TransferMs),
+                Total = RoundMs(t.TotalMs),
+                TlsCreateSslStream = RoundMs(Math.Max(0, t.TlsCreateStreamEnd - t.TlsCreateStreamStart)),
+                TlsAuthenticateHandshake = RoundMs(Math.Max(0, t.TlsAuthEnd - t.TlsAuthStart)),
+                TlsPostHandshakeInspection = RoundMs(Math.Max(0, t.TlsPostInfoEnd - t.TlsPostInfoStart))
+            };
+
+            response.Waterfall = new Waterfall
+            {
+                DnsStart = RoundMs(t.DnsStart),
+                DnsEnd = RoundMs(t.DnsEnd),
+                TcpStart = RoundMs(t.TcpStart),
+                TcpEnd = RoundMs(t.TcpEnd),
+                TlsStart = RoundMs(t.TlsStart),
+                TlsEnd = RoundMs(t.TlsEnd),
+                TtfbStart = RoundMs(t.TtfbStart),
+                TtfbEnd = RoundMs(t.TtfbEnd),
+                TransferStart = RoundMs(t.TransferStart),
+                TransferEnd = RoundMs(t.TransferEnd),
+                TotalStart = 0,
+                TotalEnd = RoundMs(t.TotalEnd)
+            };
+
+            response.TlsDetails = BuildTlsDetails(t);
+            response.AsciiWaterfall = AsciiWaterfallAligned(response.Waterfall);
+            response.Warnings = BuildWarnings(response.TimingsMs);
+
+            context.Logger.LogLine($"ERROR: {response.Error}");
+            if (response.TlsDetails != null)
+                LogTlsDetails(context, response.TlsDetails, response.TimingsMs);
+
+            context.Logger.LogLine(response.AsciiWaterfall);
+            foreach (var w in response.Warnings) context.Logger.LogLine(w);
+
+            return response;
+        }
+    }
+
+    // -------------------------
+    // HTTP parsing helpers
+    // -------------------------
+
+    private static async Task<(int StatusCode, Dictionary<string, string> Headers, byte[] HeaderBytes)> ReadHeadersAsync(Stream s, CancellationToken ct)
+    {
+        // Read until \r\n\r\n
+        using var ms = new MemoryStream();
+        byte[] buf = ArrayPool<byte>.Shared.Rent(4096);
+
+        try
+        {
+            int found = -1;
+            while (true)
+            {
+                int n = await s.ReadAsync(buf, 0, buf.Length, ct).ConfigureAwait(false);
+                if (n <= 0)
+                    throw new IOException("Connection closed before headers were received.");
+
+                ms.Write(buf, 0, n);
+
+                var data = ms.GetBuffer();
+                int len = (int)ms.Length;
+
+                found = IndexOfHeaderTerminator(data, len);
+                if (found >= 0)
+                {
+                    // We have full headers in [0..found+4)
+                    break;
+                }
+
+                // Prevent runaway memory usage for pathological endpoints
+                if (ms.Length > 1024 * 1024)
+                    throw new IOException("Headers too large (> 1MB).");
+            }
+
+            byte[] all = ms.ToArray();
+            int headerEnd = IndexOfHeaderTerminator(all, all.Length);
+            if (headerEnd < 0)
+                throw new IOException("Header terminator not found.");
+
+            int headerLen = headerEnd + 4;
+            byte[] headerBytes = new byte[headerLen];
+            Buffer.BlockCopy(all, 0, headerBytes, 0, headerLen);
+
+            string headerText = Encoding.ASCII.GetString(headerBytes);
+            var lines = headerText.Split(new[] { "\r\n" }, StringSplitOptions.None);
+
+            if (lines.Length == 0)
+                throw new IOException("Empty response headers.");
+
+            // Status line: HTTP/1.1 200 OK
+            int statusCode = ParseStatusCode(lines[0]);
+
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 1; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (string.IsNullOrEmpty(line)) break;
+
+                int colon = line.IndexOf(':');
+                if (colon <= 0) continue;
+
+                string name = line.Substring(0, colon).Trim();
+                string value = line.Substring(colon + 1).Trim();
+                headers[name] = value;
+            }
+
+            // Note: we intentionally do not attempt to keep the extra buffered body bytes here.
+            // For a timing tool, reading the body from the stream after headers is sufficient when Connection: close is used.
+            // If you later need perfect accounting, we can implement a "prefetch buffer" wrapper.
+
+            return (statusCode, headers, headerBytes);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+    private static int IndexOfHeaderTerminator(byte[] data, int len)
+    {
+        // Find \r\n\r\n
+        for (int i = 3; i < len; i++)
+        {
+            if (data[i - 3] == (byte)'\r' &&
+                data[i - 2] == (byte)'\n' &&
+                data[i - 1] == (byte)'\r' &&
+                data[i] == (byte)'\n')
+                return i - 3;
+        }
+        return -1;
+    }
+
+    private static int ParseStatusCode(string statusLine)
+    {
+        // Expected: HTTP/1.1 200 OK
+        // Split and parse the second token.
+        var parts = statusLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2 || !int.TryParse(parts[1], out var code))
+            return 0;
+        return code;
+    }
+
+    private static async Task<long> ReadFixedLengthBodyAsync(Stream s, long length, CancellationToken ct)
+    {
+        byte[] buf = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        long total = 0;
+
+        try
+        {
+            while (total < length)
+            {
+                int want = (int)Math.Min(buf.Length, length - total);
+                int n = await s.ReadAsync(buf, 0, want, ct).ConfigureAwait(false);
+                if (n <= 0) break;
+                total += n;
+            }
+            return total;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+    private static async Task<long> ReadToEofAsync(Stream s, CancellationToken ct)
+    {
+        byte[] buf = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        long total = 0;
+
+        try
+        {
+            while (true)
+            {
+                int n = await s.ReadAsync(buf, 0, buf.Length, ct).ConfigureAwait(false);
+                if (n <= 0) break;
+                total += n;
+            }
+            return total;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
+        }
+    }
+
+    private static async Task<long> ReadChunkedBodyAsync(Stream s, CancellationToken ct)
+    {
+        // Minimal chunked decoder: reads chunk size lines (hex), then that many bytes, until 0.
+        long total = 0;
+
+        while (true)
+        {
+            string line = await ReadLineAsciiAsync(s, ct).ConfigureAwait(false);
+            if (line.Length == 0)
+                continue;
+
+            // Chunk size may have extensions: "1A;ext=value"
+            int semi = line.IndexOf(';');
+            if (semi >= 0) line = line.Substring(0, semi);
+
+            if (!int.TryParse(line.Trim(), System.Globalization.NumberStyles.HexNumber, null, out int chunkSize))
+                throw new IOException("Invalid chunk size.");
+
+            if (chunkSize == 0)
+            {
+                // Consume trailing headers (optional) until empty line
                 while (true)
                 {
-                    int read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cts.Token).ConfigureAwait(false);
-                    if (read <= 0) break;
-                    bytes += read;
+                    string trailer = await ReadLineAsciiAsync(s, ct).ConfigureAwait(false);
+                    if (trailer.Length == 0) break;
                 }
+                break;
             }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
+
+            total += await ReadFixedLengthBodyAsync(s, chunkSize, ct).ConfigureAwait(false);
+
+            // Consume the trailing CRLF after chunk
+            await ReadExactAsync(s, 2, ct).ConfigureAwait(false);
         }
 
-        transferSw.Stop();
-        t.TransferMs = transferSw.Elapsed.TotalMilliseconds;
-        t.TransferEnd = baseSw.Elapsed.TotalMilliseconds;
+        return total;
+    }
 
-        baseSw.Stop();
-        t.TotalMs = baseSw.Elapsed.TotalMilliseconds;
-        t.TotalEnd = t.TotalMs;
-
-        // Build output objects.
-        var tlsTimings = BuildTlsStepTimings(t);
-
-        var outTimings = new Timings
+    private static async Task<string> ReadLineAsciiAsync(Stream s, CancellationToken ct)
+    {
+        // Read until CRLF
+        using var ms = new MemoryStream();
+        while (true)
         {
-            Dns = RoundMs(t.DnsMs),
-            TcpConnect = RoundMs(t.TcpMs),
-            TlsHandshake = RoundMs(t.TlsMs),
-            TtfbRaw = RoundMs(t.TtfbRawMs),
-            TtfbNet = RoundMs(t.TtfbNetMs),
-            Transfer = RoundMs(t.TransferMs),
-            Total = RoundMs(t.TotalMs),
+            int b = await ReadByteAsync(s, ct).ConfigureAwait(false);
+            if (b < 0) throw new IOException("Unexpected EOF while reading line.");
 
-            TlsCreateSslStream = RoundMs(tlsTimings.CreateSslStreamMs),
-            TlsAuthenticateHandshake = RoundMs(tlsTimings.AuthenticateMs),
-            TlsPostHandshakeInspection = RoundMs(tlsTimings.PostHandshakeMs)
-        };
+            if (b == '\r')
+            {
+                int n = await ReadByteAsync(s, ct).ConfigureAwait(false);
+                if (n < 0) throw new IOException("Unexpected EOF while reading line.");
+                if (n == '\n') break;
 
-        var outWaterfall = new Waterfall
+                ms.WriteByte((byte)'\r');
+                ms.WriteByte((byte)n);
+                continue;
+            }
+
+            ms.WriteByte((byte)b);
+
+            if (ms.Length > 64 * 1024)
+                throw new IOException("Line too long.");
+        }
+
+        return Encoding.ASCII.GetString(ms.ToArray()).TrimEnd();
+    }
+
+    private static async Task<int> ReadByteAsync(Stream s, CancellationToken ct)
+    {
+        byte[] one = new byte[1];
+        int n = await s.ReadAsync(one, 0, 1, ct).ConfigureAwait(false);
+        return n == 1 ? one[0] : -1;
+    }
+
+    private static async Task ReadExactAsync(Stream s, int bytes, CancellationToken ct)
+    {
+        byte[] buf = ArrayPool<byte>.Shared.Rent(bytes);
+        int read = 0;
+
+        try
         {
-            DnsStart = RoundMs(t.DnsStart),
-            DnsEnd = RoundMs(t.DnsEnd),
-            TcpStart = RoundMs(t.TcpStart),
-            TcpEnd = RoundMs(t.TcpEnd),
-            TlsStart = RoundMs(t.TlsStart),
-            TlsEnd = RoundMs(t.TlsEnd),
-            TtfbStart = RoundMs(t.TtfbStart),
-            TtfbEnd = RoundMs(t.TtfbEnd),
-            TransferStart = RoundMs(t.TransferStart),
-            TransferEnd = RoundMs(t.TransferEnd),
-            TotalStart = 0,
-            TotalEnd = RoundMs(t.TotalEnd)
-        };
-
-        var tlsDetails = BuildTlsDetails(t);
-        var ascii = AsciiWaterfallAligned(outWaterfall);
-
-        // Determine warnings.
-        var warnings = BuildWarnings(outTimings);
-
-        // CloudWatch logs
-        context.Logger.LogLine($"URL: {input.Url}");
-        context.Logger.LogLine($"HTTP {(int)resp.StatusCode} | Bytes: {bytes}");
-
-        if (tlsDetails != null)
-            LogTlsDetails(context, tlsDetails, outTimings);
-
-        context.Logger.LogLine(ascii);
-
-        foreach (var w in warnings)
-            context.Logger.LogLine(w);
-
-        return new Response
+            while (read < bytes)
+            {
+                int n = await s.ReadAsync(buf, read, bytes - read, ct).ConfigureAwait(false);
+                if (n <= 0) throw new IOException("Unexpected EOF.");
+                read += n;
+            }
+        }
+        finally
         {
-            Url = input.Url,
-            StatusCode = (int)resp.StatusCode,
-            BytesRead = bytes,
-            TimingsMs = outTimings,
-            Waterfall = outWaterfall,
-            TlsDetails = tlsDetails,
-            AsciiWaterfall = ascii,
-            Warnings = warnings
-        };
+            ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 
     // -------------------------
@@ -564,7 +817,6 @@ public class Function
 
         var chainStatus = new List<string>();
 
-        // Prefer custom chain status when using CustomRootTrust; otherwise use platform chain status.
         if (string.Equals(t.TlsValidationMode, "CustomRootTrust", StringComparison.OrdinalIgnoreCase))
             chainStatus.AddRange(t.CustomChainStatus ?? new List<string>());
         else
@@ -653,31 +905,37 @@ public class Function
         double msPerCol = total / cols;
 
         string Line(string name, double start, double end)
-        {
-            int s = (int)Math.Round(start / msPerCol);
-            int e = (int)Math.Round(end / msPerCol);
-            if (e < s) e = s;
+	{
+	    // Use floor/ceil mapping to avoid rounding pushing start to cols
+	    int startCol = (int)Math.Floor(start / msPerCol);
+	    int endCol = (int)Math.Ceiling(end / msPerCol);
 
-            s = Math.Clamp(s, 0, cols);
-            e = Math.Clamp(e, 0, cols);
+	    // Ensure at least a 1-column bar
+	    if (endCol <= startCol) endCol = startCol + 1;
 
-            int barLen = Math.Max(1, e - s);
-            int tailSpaces = cols - (s + barLen);
+	    // Clamp to keep bars inside [0..cols]
+	    // startCol must be <= cols-1 so we can always draw at least 1 char.
+	    startCol = Math.Clamp(startCol, 0, cols - 1);
+	    endCol = Math.Clamp(endCol, startCol + 1, cols);
 
-            var sb = new StringBuilder();
-            sb.Append(name.PadRight(labelWidth));
-            sb.Append(" |");
+	    int barLen = endCol - startCol;                 // >= 1
+	    int tailSpaces = cols - (startCol + barLen);    // >= 0
 
-            if (s > 0) sb.Append(' ', s);
-            sb.Append(new string('#', barLen));
-            if (tailSpaces > 0) sb.Append(' ', tailSpaces);
+	    var sb = new StringBuilder();
+	    sb.Append(name.PadRight(labelWidth));
+	    sb.Append(" |");
 
-            sb.Append("| ");
-            double dur = Math.Max(0, end - start);
-            sb.Append(dur.ToString("0.00").PadLeft(msWidth));
-            sb.Append(" ms");
-            return sb.ToString();
-        }
+	    if (startCol > 0) sb.Append(' ', startCol);
+	    sb.Append(new string('#', barLen));
+	    if (tailSpaces > 0) sb.Append(' ', tailSpaces);
+
+	    sb.Append("| ");
+	    double dur = Math.Max(0, end - start);
+	    sb.Append(dur.ToString("0.00").PadLeft(msWidth));
+	    sb.Append(" ms");
+
+	    return sb.ToString();
+	}
 
         var outSb = new StringBuilder();
         outSb.AppendLine($"Waterfall (0 -> {w.TotalEnd:0.00} ms)");
@@ -691,12 +949,11 @@ public class Function
     }
 
     // -------------------------
-    // Helpers: DNS/IP selection
+    // Helpers
     // -------------------------
 
     private static IPAddress ChooseIp(IPAddress[] ips)
     {
-        // Prefer IPv4 if present, otherwise fall back to the first address.
         foreach (var ip in ips)
             if (ip.AddressFamily == AddressFamily.InterNetwork)
                 return ip;
@@ -704,10 +961,6 @@ public class Function
     }
 
     private static double RoundMs(double v) => Math.Round(v, 2);
-
-    // -------------------------
-    // Helpers: PEM parsing
-    // -------------------------
 
     private static X509Certificate2Collection? BuildCertCollectionFromPem(string? pem, string fieldName)
     {
@@ -756,10 +1009,6 @@ public class Function
         }
     }
 
-    // -------------------------
-    // Helpers: SAN extraction
-    // -------------------------
-
     private static List<string> ExtractSubjectAlternativeNames(X509Certificate2 cert)
     {
         var list = new List<string>();
@@ -784,24 +1033,18 @@ public class Function
             }
             catch
             {
-                // If SAN extraction fails, do not fail the request.
+                // Best effort only.
             }
         }
 
         return list;
     }
 
-    // -------------------------
-    // Internal timing collector
-    // -------------------------
-
     private sealed class TimingCollector
     {
-        // Durations
         public double DnsMs, TcpMs, TlsMs, TransferMs, TotalMs;
         public double TtfbRawMs, TtfbNetMs;
 
-        // Offsets
         public double DnsStart, DnsEnd;
         public double TcpStart, TcpEnd;
         public double TlsStart, TlsEnd;
@@ -809,12 +1052,10 @@ public class Function
         public double TransferStart, TransferEnd;
         public double TotalStart, TotalEnd;
 
-        // Coarse TLS internal steps
         public double TlsCreateStreamStart, TlsCreateStreamEnd;
         public double TlsAuthStart, TlsAuthEnd;
         public double TlsPostInfoStart, TlsPostInfoEnd;
 
-        // Negotiated TLS attributes
         public string? NegotiatedProtocol;
         public string? CipherAlgorithm;
         public int CipherStrength;
@@ -824,7 +1065,6 @@ public class Function
         public int KeyExchangeStrength;
         public string? Alpn;
 
-        // Remote certificate
         public string? RemoteCertSubject;
         public string? RemoteCertIssuer;
         public string? RemoteCertThumbprint;
@@ -832,15 +1072,12 @@ public class Function
         public string? RemoteCertNotAfter;
         public List<string>? RemoteCertSans;
 
-        // Validation diagnostics
         public string? TlsPolicyErrors;
         public string? TlsValidationMode;
 
-        // Chain diagnostics as reported by platform callback (may vary)
         public int PlatformChainElements;
         public List<string>? PlatformChainStatus;
 
-        // Custom chain diagnostics (only for CustomRootTrust)
         public int CustomChainElements;
         public List<string>? CustomChainStatus;
     }

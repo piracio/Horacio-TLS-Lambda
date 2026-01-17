@@ -42,9 +42,7 @@ The Lambda measures the following phases:
 ### Waterfall visualization
 CloudWatch logs include an ASCII timeline like:
 
-Example waterfall output:
-
-```
+```text
 Waterfall (0 -> 245.12 ms)
 DNS    |   #######                                                                     |     12.30 ms
 TCP    |          ##########                                                           |     18.40 ms
@@ -57,7 +55,7 @@ TOTAL  |########################################################################
 ### Warnings
 If any phase exceeds **1000 ms**, the Lambda logs and returns warnings such as:
 
-```
+```text
 WARNING: TLS handshake took 1240.55 ms (> 1000 ms).
 ```
 
@@ -105,18 +103,27 @@ Horacio-TLS-Lambda/
 ├── LICENSE
 ├── .gitignore
 └── src/
-    └── Horacio-TLS-Lambda/
-        ├── Horacio-TLS-Lambda.csproj
-        ├── Function.cs
-        ├── aws-lambda-tools-defaults.json
-        └── Horacio-TLS-Lambda.sln
+    ├── Horacio-TLS-Lambda/
+    │   ├── Horacio-TLS-Lambda.csproj
+    │   ├── Function.cs
+    │   ├── aws-lambda-tools-defaults.json
+    │   └── Horacio-TLS-Lambda.sln
+    └── Horacio-TLS-Lambda.Local/
+        ├── Horacio-TLS-Lambda.Local.csproj
+        └── Program.cs
 ```
 
 ---
 
 ## Build
 
-From the project directory:
+From the repo root:
+
+```bash
+dotnet build -c Release
+```
+
+Or from the Lambda project directory:
 
 ```bash
 cd src/Horacio-TLS-Lambda
@@ -127,7 +134,7 @@ dotnet build -c Release
 
 ## Deploy
 
-From the project directory:
+From the Lambda project directory:
 
 ```bash
 cd src/Horacio-TLS-Lambda
@@ -193,59 +200,6 @@ The Lambda returns JSON including:
 - `asciiWaterfall`
 - `warnings`
 
-Example output structure:
-
-```json
-{
-  "url": "https://example.com",
-  "statusCode": 200,
-  "bytesRead": 1256,
-  "timingsMs": {
-    "dns": 12.3,
-    "tcpConnect": 18.4,
-    "tlsHandshake": 52.1,
-    "ttfbNet": 90.0,
-    "ttfbRaw": 172.0,
-    "transfer": 42.3,
-    "total": 245.12,
-    "tlsCreateSslStream": 0.05,
-    "tlsAuthenticateHandshake": 45.12,
-    "tlsPostHandshakeInspection": 0.6
-  },
-  "waterfall": {
-    "dnsStart": 0,
-    "dnsEnd": 12.3,
-    "tcpStart": 12.3,
-    "tcpEnd": 30.7,
-    "tlsStart": 30.7,
-    "tlsEnd": 82.8,
-    "ttfbStart": 82.8,
-    "ttfbEnd": 172,
-    "transferStart": 172,
-    "transferEnd": 214.3,
-    "totalStart": 0,
-    "totalEnd": 245.12
-  },
-  "tlsDetails": {
-    "validationMode": "SystemTrust",
-    "protocol": "Tls13",
-    "alpn": "h2",
-    "cipherAlgorithm": "Aes256",
-    "cipherStrength": 256,
-    "remoteCertSubject": "CN=example.com",
-    "remoteCertIssuer": "CN=Example Intermediate CA",
-    "remoteCertNotBefore": "2026-01-01T00:00:00.0000000Z",
-    "remoteCertNotAfter": "2027-01-01T00:00:00.0000000Z",
-    "remoteCertSans": ["DNS Name=example.com", "DNS Name=www.example.com"],
-    "chainElements": 3,
-    "chainStatus": [],
-    "policyErrors": "None"
-  },
-  "asciiWaterfall": "Waterfall (0 → 245.12 ms)\n...",
-  "warnings": []
-}
-```
-
 ---
 
 ## CloudWatch logs output
@@ -273,11 +227,89 @@ To get exact per-message TLS timings you typically need packet capture (pcap) an
 
 ---
 
+## Local testing
+
+You can test the Lambda logic locally without deploying to AWS.
+
+### Option 1: AWS Lambda Test Tool (local emulator)
+
+Install:
+
+```bash
+dotnet tool install --global Amazon.Lambda.TestTool-8.0
+```
+
+Run inside `src/Horacio-TLS-Lambda/`:
+
+```bash
+cd src/Horacio-TLS-Lambda
+dotnet lambda-test-tool-8.0
+```
+
+Then open the local URL shown in the terminal and invoke using a JSON payload like:
+
+```json
+{
+  "url": "https://example.com",
+  "method": "GET",
+  "timeoutMs": 15000
+}
+```
+
+### Option 2 (Recommended for developers): Run the local runner project
+
+This repository includes a dedicated console runner:
+
+- Project: `src/Horacio-TLS-Lambda.Local`
+
+Build everything:
+
+```bash
+### From Base ###
+dotnet build .\src\Horacio-TLS-Lambda.Local\Horacio-TLS-Lambda.Local.csproj -c Release```
+
+Run the local runner (SystemTrust / public CAs):
+
+```bash
+dotnet run --project .\src\Horacio-TLS-Lambda.Local\Horacio-TLS-Lambda.Local.csproj -c Release -- "https://example.com"
+```
+
+Run the local runner using a private Root CA + Intermediate PEM files:
+
+```bash
+dotnet run --project src/Horacio-TLS-Lambda.Local -c Release -- \
+  --url "https://your-private-endpoint.local/api/health" \
+  --caRootPemFile "/path/to/root-ca.pem" \
+  --intermediatePemFile "/path/to/intermediate.pem"
+```
+
+Windows PowerShell example:
+
+```powershell
+dotnet run --project .\src\Horacio-TLS-Lambda.Local -c Release -- `
+  --url "https://your-private-endpoint.local/api/health" `
+  --caRootPemFile "D:\certs\root-ca.pem" `
+  --intermediatePemFile "D:\certs\intermediate.pem"
+```
+
+This runs the same Lambda handler logic and prints:
+- TLS details
+- ASCII waterfall
+- warnings (if any phase > 1 second)
+- JSON output
+
+**Notes**
+- If you omit `--caRootPemFile` and `--intermediatePemFile`, the runner uses **SystemTrust**.
+- `--intermediatePemFile` alone typically does not help unless the Root CA is trusted (either by SystemTrust or via `--caRootPemFile`).
+
+
+---
+
 ## Handler
 
 The Lambda handler is configured as:
 
-```
+```text
 HoracioTLSLambda::HoracioTLSLambda.Function::FunctionHandler
 ```
 
