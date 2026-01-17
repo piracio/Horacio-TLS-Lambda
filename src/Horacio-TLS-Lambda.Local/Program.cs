@@ -42,14 +42,18 @@ public static class Program
             intermediatePem = ReadTextFileOrThrow(interPath);
         }
 
+        string revocationMode = parsed.TryGetValue("revocationMode", out var r) ? r : "NoCheck";
+
         var request = new Request
         {
             Url = url,
             Method = method,
             TimeoutMs = timeoutMs,
             CaRootPem = caRootPem,
-            IntermediatePem = intermediatePem
+            IntermediatePem = intermediatePem,
+            RevocationMode = revocationMode
         };
+
 
         var fn = new Function();
         var result = await fn.FunctionHandler(request, new LocalLambdaContext());

@@ -33,10 +33,15 @@ public class Request
     // HTTP method (default: GET)
     [JsonPropertyName("method")]
     public string Method { get; set; } = "GET";
-
+	
     // Request timeout in milliseconds (default: 15000)
     [JsonPropertyName("timeoutMs")]
     public int TimeoutMs { get; set; } = 15000;
+
+	// Certificate revocation checking mode for TLS validation.
+    // Values: "NoCheck" (default), "Online", "Offline"
+    [JsonPropertyName("revocationMode")]
+    public string? RevocationMode { get; set; }
 
     // Custom Root CA bundle (PEM, optional). If provided, TLS validation is anchored to these roots.
     [JsonPropertyName("caRootPem")]
@@ -187,6 +192,8 @@ public class Function
         using var cts = new CancellationTokenSource(input.TimeoutMs);
         var ct = cts.Token;
 
+        var revocationMode = ParseRevocationMode(input.RevocationMode);
+
         var rootPool = BuildCertCollectionFromPem(input.CaRootPem, "caRootPem");
         var intermediatePool = BuildCertCollectionFromPem(input.IntermediatePem, "intermediatePem");
 
@@ -272,11 +279,13 @@ public class Function
                         return false;
 
                     using var customChain = new X509Chain();
-                    customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                    customChain.ChainPolicy.RevocationMode = revocationMode;
+                    customChain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
                     customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
 
                     customChain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
                     customChain.ChainPolicy.CustomTrustStore.Clear();
+					
                     foreach (var root in rootPool)
                         customChain.ChainPolicy.CustomTrustStore.Add(root);
 
@@ -313,7 +322,7 @@ public class Function
                 {
                     TargetHost = uri.Host,
                     EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                    CertificateRevocationCheckMode = revocationMode
                 }, ct).ConfigureAwait(false);
 
                 tlsSw.Stop();
@@ -961,6 +970,20 @@ public class Function
     }
 
     private static double RoundMs(double v) => Math.Round(v, 2);
+	
+    private static X509RevocationMode ParseRevocationMode(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return X509RevocationMode.NoCheck;
+
+        return s.Trim().ToLowerInvariant() switch
+        {
+            "nocheck" => X509RevocationMode.NoCheck,
+            "online" => X509RevocationMode.Online,
+            "offline" => X509RevocationMode.Offline,
+            _ => throw new ArgumentException("Invalid revocationMode. Use: NoCheck, Online, or Offline.")
+        };
+    }	
 
     private static X509Certificate2Collection? BuildCertCollectionFromPem(string? pem, string fieldName)
     {

@@ -180,6 +180,7 @@ The Lambda input event supports:
 | `url` | string | Yes | (none) | HTTP/HTTPS URL to query |
 | `method` | string | No | `GET` | HTTP method |
 | `timeoutMs` | int | No | `15000` | Timeout for the full request |
+| `revocationMode` | string | No | `NoCheck` | Certificate revocation checking: `NoCheck`, `Online`, `Offline` |
 | `caRootPem` | string | No | empty | Root CA bundle in PEM format (enables CustomRootTrust) |
 | `intermediatePem` | string | No | empty | Intermediate certificates in PEM format |
 
@@ -189,6 +190,24 @@ Important notes:
 - If the endpoint uses a private CA, you normally must provide `caRootPem`
 
 ---
+
+## Certificate revocation checking (CRL / OCSP)
+
+This Lambda supports enabling or disabling certificate revocation checks during TLS validation.
+
+Input field:
+
+- `revocationMode`: `NoCheck` (default), `Online`, `Offline`
+
+Examples:
+
+Disable revocation checks (default):
+
+```json
+{
+  "url": "https://example.com",
+  "revocationMode": "NoCheck"
+}
 
 ## Output format
 
@@ -280,7 +299,8 @@ Run the local runner using a private Root CA + Intermediate PEM files:
 dotnet run --project src/Horacio-TLS-Lambda.Local -c Release -- \
   --url "https://your-private-endpoint.local/api/health" \
   --caRootPemFile "/path/to/root-ca.pem" \
-  --intermediatePemFile "/path/to/intermediate.pem"
+  --intermediatePemFile "/path/to/intermediate.pem" \
+  --revocationMode Online
 ```
 
 Windows PowerShell example:
@@ -289,7 +309,8 @@ Windows PowerShell example:
 dotnet run --project .\src\Horacio-TLS-Lambda.Local -c Release -- `
   --url "https://your-private-endpoint.local/api/health" `
   --caRootPemFile "D:\certs\root-ca.pem" `
-  --intermediatePemFile "D:\certs\intermediate.pem"
+  --intermediatePemFile "D:\certs\intermediate.pem" `
+  --revocationMode Online
 ```
 
 This runs the same Lambda handler logic and prints:
