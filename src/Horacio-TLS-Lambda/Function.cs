@@ -216,10 +216,9 @@ public class Function
         var revocationLabel = FormatRevocationLabel(revocationMode, revocationSoftFail);
 
         context.Logger.LogLine($"URL: {input.Url}");
-        context.Logger.LogLine($"TLS Revocation: {revocationLabel} [NOCHECK|ONLINE STRICT|ONLINE SOFT|OFFLINE STRICT|OFFLINE SOFT]");
-        context.Logger.LogLine($"TLS RevocationMode: {revocationMode} [NoCheck|Online|Offline]");
-        context.Logger.LogLine($"TLS RevocationSoftFail: {revocationSoftFail} [true|false]");
-
+        context.Logger.LogLine($"TLS Revocation (computed): {revocationLabel}");
+        context.Logger.LogLine($"TLS RevocationMode (input): {revocationMode} (allowed: NoCheck|Online|Offline)");
+        context.Logger.LogLine($"TLS RevocationSoftFail (input): {revocationSoftFail} (allowed: true|false)");
         var rootPool = BuildCertCollectionFromPem(input.CaRootPem, "caRootPem");
         var intermediatePool = BuildCertCollectionFromPem(input.IntermediatePem, "intermediatePem");
 
