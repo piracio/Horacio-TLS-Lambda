@@ -30,15 +30,18 @@ public class Request
     [JsonPropertyName("url")]
     public string Url { get; set; } = "";
 
+    [JsonPropertyName("revocationSoftFail")]
+    public bool? RevocationSoftFail { get; set; }
+
     // HTTP method (default: GET)
     [JsonPropertyName("method")]
     public string Method { get; set; } = "GET";
-	
+
     // Request timeout in milliseconds (default: 15000)
     [JsonPropertyName("timeoutMs")]
     public int TimeoutMs { get; set; } = 15000;
 
-	// Certificate revocation checking mode for TLS validation.
+    // Certificate revocation checking mode for TLS validation.
     // Values: "NoCheck" (default), "Online", "Offline"
     [JsonPropertyName("revocationMode")]
     public string? RevocationMode { get; set; }
@@ -71,6 +74,12 @@ public class Response
 
     [JsonPropertyName("tlsDetails")]
     public TlsDetails? TlsDetails { get; set; }
+
+    [JsonPropertyName("crlUrls")]
+    public List<string> CrlUrls { get; set; } = new();
+
+    [JsonPropertyName("aiaUrls")]
+    public List<string> AiaUrls { get; set; } = new();
 
     [JsonPropertyName("asciiWaterfall")]
     public string AsciiWaterfall { get; set; } = "";
@@ -107,6 +116,9 @@ public class Timings
 
     [JsonPropertyName("total")]
     public double Total { get; set; }
+
+    [JsonPropertyName("revocationMode")]
+    public string RevocationMode { get; set; } = "NoCheck";
 
     // Coarse TLS internal steps
     [JsonPropertyName("tlsCreateSslStream")]
@@ -167,6 +179,13 @@ public class TlsDetails
 
     [JsonPropertyName("policyErrors")] public string? PolicyErrors { get; set; }
     [JsonPropertyName("validationMode")] public string ValidationMode { get; set; } = "SystemTrust";
+
+
+    // CRL Distribution Point (CDP) URLs extracted from the server certificate
+    [JsonPropertyName("crlUrls")] public List<string> CrlUrls { get; set; } = new();
+
+    // Authority Information Access (AIA) URLs extracted from the server certificate (often includes OCSP and CA Issuers)
+    [JsonPropertyName("aiaUrls")] public List<string> AiaUrls { get; set; } = new();
 }
 
 // -------------------------
@@ -193,6 +212,13 @@ public class Function
         var ct = cts.Token;
 
         var revocationMode = ParseRevocationMode(input.RevocationMode);
+        bool revocationSoftFail = input.RevocationSoftFail ?? true;
+        var revocationLabel = FormatRevocationLabel(revocationMode, revocationSoftFail);
+
+        context.Logger.LogLine($"URL: {input.Url}");
+        context.Logger.LogLine($"TLS Revocation: {revocationLabel} [NOCHECK|ONLINE STRICT|ONLINE SOFT|OFFLINE STRICT|OFFLINE SOFT]");
+        context.Logger.LogLine($"TLS RevocationMode: {revocationMode} [NoCheck|Online|Offline]");
+        context.Logger.LogLine($"TLS RevocationSoftFail: {revocationSoftFail} [true|false]");
 
         var rootPool = BuildCertCollectionFromPem(input.CaRootPem, "caRootPem");
         var intermediatePool = BuildCertCollectionFromPem(input.IntermediatePem, "intermediatePem");
@@ -265,11 +291,45 @@ public class Function
                             .ToList();
                     }
 
+                    // Helper: allow only "revocation could not be determined" failures
+                    // when revocationSoftFail is enabled.
+                    bool AllowSoftFailForRevocationUnknown(X509Chain? c)
+                    {
+                        if (!revocationSoftFail) return false;
+                        if (revocationMode == X509RevocationMode.NoCheck) return false;
+                        if (c == null || c.ChainStatus == null || c.ChainStatus.Length == 0) return false;
+
+                        // Never allow if the chain explicitly says the certificate is revoked.
+                        if (c.ChainStatus.Any(s => s.Status == X509ChainStatusFlags.Revoked))
+                            return false;
+
+                        // Allow only "offline/unknown" revocation statuses.
+                        bool onlyReachabilityOrUnknown = c.ChainStatus.All(s =>
+                            s.Status == X509ChainStatusFlags.OfflineRevocation ||
+                            s.Status == X509ChainStatusFlags.RevocationStatusUnknown
+                        );
+
+                        if (onlyReachabilityOrUnknown)
+                        {
+                            t.RevocationSoftFailUsed = true;
+                            return true;
+                        }
+
+                        return false;
+                    }
+
                     // System trust store path
                     if (rootPool == null || rootPool.Count == 0)
                     {
                         t.TlsValidationMode = "SystemTrust";
-                        return sslPolicyErrors == SslPolicyErrors.None;
+                        if (sslPolicyErrors == SslPolicyErrors.None)
+                            return true;
+
+                        // If the only problem is revocation reachability/unknown, allow when soft-fail is enabled.
+                        if (sslPolicyErrors == SslPolicyErrors.RemoteCertificateChainErrors && AllowSoftFailForRevocationUnknown(chain))
+                            return true;
+
+                        return false;
                     }
 
                     // Custom root trust path
@@ -302,6 +362,29 @@ public class Function
                     t.CustomChainStatus = customChain.ChainStatus
                         .Select(s => $"{s.Status}: {s.StatusInformation?.Trim()}")
                         .ToList();
+
+                    // If chain build failed only because revocation could not be checked (offline/unknown),
+                    // allow when soft-fail is enabled. Never allow if explicitly revoked.
+                    if (!ok && revocationSoftFail && revocationMode != X509RevocationMode.NoCheck && customChain.ChainStatus != null && customChain.ChainStatus.Length > 0)
+                    {
+                        if (customChain.ChainStatus.Any(s => s.Status == X509ChainStatusFlags.Revoked))
+                        {
+                            ok = false;
+                        }
+                        else
+                        {
+                            bool onlyReachabilityOrUnknown = customChain.ChainStatus.All(s =>
+                                s.Status == X509ChainStatusFlags.OfflineRevocation ||
+                                s.Status == X509ChainStatusFlags.RevocationStatusUnknown
+                            );
+
+                            if (onlyReachabilityOrUnknown)
+                            {
+                                t.RevocationSoftFailUsed = true;
+                                ok = true;
+                            }
+                        }
+                    }
 
                     // Enforce hostname validation.
                     if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
@@ -350,6 +433,8 @@ public class Function
                 if (sslStream.RemoteCertificate != null)
                 {
                     var remote = new X509Certificate2(sslStream.RemoteCertificate);
+                    t.RemoteCertCrlUrls = ExtractCdpUrls(remote);
+                    t.RemoteCertAiaUrls = ExtractAiaUrls(remote);
                     t.RemoteCertSubject = remote.Subject;
                     t.RemoteCertIssuer = remote.Issuer;
                     t.RemoteCertThumbprint = remote.Thumbprint;
@@ -445,6 +530,7 @@ public class Function
 
             response.TimingsMs = new Timings
             {
+                RevocationMode = revocationMode.ToString(),
                 Dns = RoundMs(t.DnsMs),
                 TcpConnect = RoundMs(t.TcpMs),
                 TlsHandshake = RoundMs(t.TlsMs),
@@ -478,8 +564,13 @@ public class Function
             response.AsciiWaterfall = AsciiWaterfallAligned(response.Waterfall);
             response.Warnings = BuildWarnings(response.TimingsMs);
 
-            // Logs
-            context.Logger.LogLine($"URL: {input.Url}");
+            if (t.RevocationSoftFailUsed)
+            {
+                var msg = "WARNING: Revocation check could not be completed (offline/unknown). Proceeding due to revocationSoftFail=true.";
+                response.Warnings.Add(msg);
+                context.Logger.LogLine(msg);
+            }
+
             context.Logger.LogLine($"HTTP {response.StatusCode} | Bytes: {response.BytesRead}");
 
             if (response.TlsDetails != null)
@@ -501,6 +592,7 @@ public class Function
 
             response.TimingsMs = new Timings
             {
+                RevocationMode = revocationMode.ToString(),
                 Dns = RoundMs(t.DnsMs),
                 TcpConnect = RoundMs(t.TcpMs),
                 TlsHandshake = RoundMs(t.TlsMs),
@@ -532,6 +624,13 @@ public class Function
             response.TlsDetails = BuildTlsDetails(t);
             response.AsciiWaterfall = AsciiWaterfallAligned(response.Waterfall);
             response.Warnings = BuildWarnings(response.TimingsMs);
+
+            if (t.RevocationSoftFailUsed)
+            {
+                var msg = "WARNING: Revocation check could not be completed (offline/unknown). Proceeding due to revocationSoftFail=true.";
+                response.Warnings.Add(msg);
+                context.Logger.LogLine(msg);
+            }
 
             context.Logger.LogLine($"ERROR: {response.Error}");
             if (response.TlsDetails != null)
@@ -854,20 +953,33 @@ public class Function
             ChainElements = chainElements,
             ChainStatus = chainStatus,
             PolicyErrors = t.TlsPolicyErrors,
-            ValidationMode = t.TlsValidationMode ?? "SystemTrust"
+            ValidationMode = t.TlsValidationMode ?? "SystemTrust",
+            CrlUrls = t.RemoteCertCrlUrls ?? new List<string>(),
+            AiaUrls = t.RemoteCertAiaUrls ?? new List<string>(),
         };
     }
 
     private static void LogTlsDetails(ILambdaContext context, TlsDetails tls, Timings timings)
     {
         context.Logger.LogLine("TLS details:");
-        context.Logger.LogLine($"  Validation: {tls.ValidationMode}");
-        context.Logger.LogLine($"  Protocol  : {tls.Protocol}");
-        context.Logger.LogLine($"  ALPN      : {tls.Alpn}");
-        context.Logger.LogLine($"  Cipher    : {tls.CipherAlgorithm} ({tls.CipherStrength})");
-        context.Logger.LogLine($"  Hash      : {tls.HashAlgorithm} ({tls.HashStrength})");
-        context.Logger.LogLine($"  KeyEx     : {tls.KeyExchangeAlgorithm} ({tls.KeyExchangeStrength})");
-        context.Logger.LogLine($"  PolicyErr : {tls.PolicyErrors}");
+        context.Logger.LogLine($"  Validation    : {tls.ValidationMode}");
+        context.Logger.LogLine($"  RevocationMode: {timings.RevocationMode}");
+        context.Logger.LogLine($"  Protocol      : {tls.Protocol}");
+        context.Logger.LogLine($"  ALPN          : {tls.Alpn}");
+        context.Logger.LogLine($"  Cipher        : {tls.CipherAlgorithm} ({tls.CipherStrength})");
+        context.Logger.LogLine($"  Hash          : {tls.HashAlgorithm} ({tls.HashStrength})");
+        context.Logger.LogLine($"  KeyEx         : {tls.KeyExchangeAlgorithm} ({tls.KeyExchangeStrength})");
+        context.Logger.LogLine($"  PolicyErr     : {tls.PolicyErrors}");
+
+        if (tls.CrlUrls.Count > 0)
+            context.Logger.LogLine($"  CRL URLs   : {string.Join(", ", tls.CrlUrls)}");
+        else
+            context.Logger.LogLine("  CRL URLs   : (none)");
+
+        if (tls.AiaUrls.Count > 0)
+            context.Logger.LogLine($"  AIA URLs   : {string.Join(", ", tls.AiaUrls)}");
+        else
+            context.Logger.LogLine("  AIA URLs   : (none)");
 
         if (!string.IsNullOrWhiteSpace(tls.RemoteCertSubject))
         {
@@ -971,6 +1083,17 @@ public class Function
 
     private static double RoundMs(double v) => Math.Round(v, 2);
 	
+    private static string FormatRevocationLabel(X509RevocationMode mode, bool softFail)
+    {
+        return mode switch
+        {
+            X509RevocationMode.NoCheck => "NOCHECK",
+            X509RevocationMode.Online => softFail ? "ONLINE SOFT" : "ONLINE STRICT",
+            X509RevocationMode.Offline => softFail ? "OFFLINE SOFT" : "OFFLINE STRICT",
+            _ => "UNKNOWN"
+        };
+    }
+
     private static X509RevocationMode ParseRevocationMode(string? s)
     {
         if (string.IsNullOrWhiteSpace(s))
@@ -984,6 +1107,7 @@ public class Function
             _ => throw new ArgumentException("Invalid revocationMode. Use: NoCheck, Online, or Offline.")
         };
     }	
+
 
     private static X509Certificate2Collection? BuildCertCollectionFromPem(string? pem, string fieldName)
     {
@@ -1063,6 +1187,58 @@ public class Function
         return list;
     }
 
+    private static List<string> ExtractCdpUrls(X509Certificate2 cert)
+    {
+        // CRL Distribution Points (CDP) = 2.5.29.31
+        return ExtractUrlsFromExtension(cert, "2.5.29.31");
+    }
+
+    private static List<string> ExtractAiaUrls(X509Certificate2 cert)
+    {
+        // Authority Information Access (AIA) = 1.3.6.1.5.5.7.1.1
+        // Typically contains OCSP and CA Issuers URLs.
+        return ExtractUrlsFromExtension(cert, "1.3.6.1.5.5.7.1.1");
+    }
+
+    private static List<string> ExtractUrlsFromExtension(X509Certificate2 cert, string oid)
+    {
+        var urls = new List<string>();
+
+        foreach (var ext in cert.Extensions)
+        {
+            if (!string.Equals(ext.Oid?.Value, oid, StringComparison.Ordinal))
+                continue;
+
+            try
+            {
+                var asn = new AsnEncodedData(ext.Oid, ext.RawData);
+                var formatted = asn.Format(true);
+
+                foreach (var line in formatted.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var s = line.Trim();
+
+                    int httpIdx = s.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
+                    int httpsIdx = s.IndexOf("https://", StringComparison.OrdinalIgnoreCase);
+
+                    int idx = httpIdx >= 0 ? httpIdx : httpsIdx;
+                    if (idx < 0)
+                        continue;
+
+                    var url = s.Substring(idx).Trim();
+                    if (!string.IsNullOrWhiteSpace(url))
+                        urls.Add(url);
+                }
+            }
+            catch
+            {
+                // Best effort only.
+            }
+        }
+
+        return urls.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private sealed class TimingCollector
     {
         public double DnsMs, TcpMs, TlsMs, TransferMs, TotalMs;
@@ -1093,6 +1269,8 @@ public class Function
         public string? RemoteCertThumbprint;
         public string? RemoteCertNotBefore;
         public string? RemoteCertNotAfter;
+        public List<string>? RemoteCertCrlUrls;
+        public List<string>? RemoteCertAiaUrls;
         public List<string>? RemoteCertSans;
 
         public string? TlsPolicyErrors;
@@ -1103,5 +1281,7 @@ public class Function
 
         public int CustomChainElements;
         public List<string>? CustomChainStatus;
+
+        public bool RevocationSoftFailUsed;
     }
 }

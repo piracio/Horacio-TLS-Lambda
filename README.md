@@ -15,6 +15,32 @@ It prints an **ASCII waterfall timeline (Gantt-like)** in CloudWatch logs and re
 
 ---
 
+## Makefile (macOS/Linux only)
+
+This repository includes a `Makefile` intended for **macOS and Linux** users.
+
+Windows users should run the commands directly using PowerShell (see the examples in this README).
+
+Common targets:
+
+```bash
+make build
+make run
+make run URL=https://google.com
+make run-online-soft URL=https://example.com
+make run-online-strict URL=https://example.com
+```
+
+Base URL shortcuts (edit `URL_BASE` inside the Makefile):
+
+```bash
+make run-base-nocheck
+make run-base-online-soft
+make run-base-online-strict
+```
+
+---
+
 ## License
 
 This project is licensed under **GPLv2**. See the `LICENSE` file.
@@ -181,6 +207,8 @@ The Lambda input event supports:
 | `method` | string | No | `GET` | HTTP method |
 | `timeoutMs` | int | No | `15000` | Timeout for the full request |
 | `revocationMode` | string | No | `NoCheck` | Certificate revocation checking: `NoCheck`, `Online`, `Offline` |
+| `revocationSoftFail` | bool | No | `true` | If `true`, do not fail TLS when revocation status cannot be verified (unknown/offline). Still fails if explicitly revoked. |
+| `revocationMode` | string | No | `NoCheck` | Certificate revocation checking: `NoCheck`, `Online`, `Offline` |
 | `caRootPem` | string | No | empty | Root CA bundle in PEM format (enables CustomRootTrust) |
 | `intermediatePem` | string | No | empty | Intermediate certificates in PEM format |
 
@@ -195,13 +223,28 @@ Important notes:
 
 This Lambda supports enabling or disabling certificate revocation checks during TLS validation.
 
-Input field:
+### Parameters
 
 - `revocationMode`: `NoCheck` (default), `Online`, `Offline`
+- `revocationSoftFail`: `true` (default)
 
-Examples:
+### What is "SoftFail"?
 
-Disable revocation checks (default):
+When `revocationMode` is `Online` or `Offline`, the TLS validation may fail if the runtime cannot reach CRL/OCSP endpoints or cannot verify revocation status.
+
+If `revocationSoftFail = true`:
+
+- TLS will continue when revocation status is **unknown/offline**
+- TLS will still fail if the certificate is explicitly **revoked**
+- This is recommended for AWS Lambda/VPC environments where CRL/OCSP endpoints may not be reachable.
+
+If `revocationSoftFail = false`:
+
+- TLS will fail when revocation cannot be verified (strict mode)
+
+### Examples
+
+Default behavior (revocation disabled):
 
 ```json
 {
@@ -210,6 +253,24 @@ Disable revocation checks (default):
 }
 ```
 
+## Online revocation, strict mode:
+
+```json
+{
+  "url": "https://example.com",
+  "revocationMode": "Online",
+  "revocationSoftFail": false
+}
+```
+## Online revocation, soft mode (recommended):
+
+```json
+{
+  "url": "https://example.com",
+  "revocationMode": "Online",
+  "revocationSoftFail": true
+}
+```
 ---
 
 ## Output format
