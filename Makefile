@@ -12,6 +12,8 @@
 # Local runner defaults (override at runtime)
 # -------------------------------------------------------------------
 LOCAL_PROJ := ./src/Horacio-TLS-Lambda.Local/Horacio-TLS-Lambda.Local.csproj
+LAMBDA_PROJ_DIR := ./src/Horacio-TLS-Lambda
+LAMBDA_PROJ := ./src/Horacio-TLS-Lambda/Horacio-TLS-Lambda.csproj
 CONFIG ?= Release
 
 # Default URL if none is specified
@@ -101,7 +103,8 @@ install-lambda-test-tool:
 		dotnet tool install -g Amazon.Lambda.TestTool-8.0
 
 local:
-		dotnet lambda-test-tool-8.0
+		dotnet build $(LAMBDA_PROJ) -c Debug
+		cd $(LAMBDA_PROJ_DIR) && dotnet lambda-test-tool-8.0
 
 # -------------------------------------------------------------------
 # Optional: build/package the Lambda project for AWS
