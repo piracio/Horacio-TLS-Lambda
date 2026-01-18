@@ -1,12 +1,14 @@
 .PHONY: help run-help build run clean distclean install-lambda-test-tool local build-lambda package \
+        clean-cert-cache clean-cert-cache-windows clean-cert-cache-macos \
         run-nocheck run-online-soft run-online-strict run-offline-soft run-offline-strict \
         run-base-nocheck run-base-online-soft run-base-online-strict
 
 # -------------------------------------------------------------------
-# Makefile (macOS/Linux only)
+# Makefile (macOS/Linux + Windows for cert-cache clearing)
 # -------------------------------------------------------------------
-# This Makefile is intended for macOS/Linux users.
-# Windows users should run the commands directly in PowerShell.
+# This Makefile primarily targets macOS/Linux.
+# It also includes a Windows-friendly target to clear the CryptoAPI URL cache
+# (CRL/OCSP/cert retrieval cache) via certutil.
 
 # -------------------------------------------------------------------
 # Local runner defaults (override at runtime)
@@ -50,6 +52,7 @@ run-help:
 	@echo "  make build"
 	@echo "  make run"
 	@echo "  make run URL=https://google.com"
+	@echo "  make clean-cert-cache   (clear TLS revocation/cert URL caches; OS-aware)"
 	@echo ""
 	@echo "Revocation options:"
 	@echo "  REV_MODE = NoCheck | Online | Offline"
@@ -73,6 +76,11 @@ run-help:
 	@echo ""
 	@echo "Private CA files (optional):"
 	@echo "  make run URL=https://private.local CA_ROOT_PEM_FILE=./root.pem INTERMEDIATE_PEM_FILE=./intermediate.pem"
+	@echo ""
+	@echo "Certificate cache helpers:"
+	@echo "  make clean-cert-cache"
+	@echo "    - Windows: certutil -urlcache * delete (CRL/OCSP cache)"
+	@echo "    - macOS: flush DNS (best effort); optional trustd restart message"
 
 # -------------------------------------------------------------------
 # Build / Run
@@ -95,6 +103,39 @@ clean:
 
 distclean:
 		rm -rf ./src/Horacio-TLS-Lambda.Local/bin ./src/Horacio-TLS-Lambda.Local/obj
+
+# -------------------------------------------------------------------
+# Certificate / revocation cache clearing (OS-aware)
+# -------------------------------------------------------------------
+# Why this exists:
+# - On Windows, CryptoAPI caches URL retrievals used during chain building
+#   (CRL/OCSP/cert fetch). Clearing it prevents "it still fails" test confusion.
+# - On macOS, there is no supported single CLI equivalent; we do a best-effort DNS
+#   flush and optionally restart trustd (commented) for a stronger reset.
+
+clean-cert-cache:
+ifeq ($(OS),Windows_NT)
+	@$(MAKE) clean-cert-cache-windows
+else
+	@UNAME_S=$$(uname -s); \
+	if [ "$$UNAME_S" = "Darwin" ]; then \
+		$(MAKE) clean-cert-cache-macos; \
+	else \
+		echo "Unsupported OS ($$UNAME_S) for cert cache clearing target. (No-op)"; \
+	fi
+endif
+
+clean-cert-cache-windows:
+	@echo "Clearing Windows CryptoAPI URL cache (CRL/OCSP/cert fetch cache)..."
+	@certutil -urlcache * delete
+
+clean-cert-cache-macos:
+	@echo "Clearing macOS caches (best effort)..."
+	@echo "Flushing DNS cache..."
+	@sudo dscacheutil -flushcache || true
+	@sudo killall -HUP mDNSResponder || true
+	@echo "Note: macOS does not expose a supported single CLI to wipe OCSP/CRL caches globally."
+	@echo "If needed, you may restart trustd (requires sudo): sudo launchctl kickstart -k system/com.apple.trustd"
 
 # -------------------------------------------------------------------
 # Optional: install Lambda test tool (local testing)
