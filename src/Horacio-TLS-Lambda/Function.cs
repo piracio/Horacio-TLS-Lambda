@@ -1,3 +1,6 @@
+// File: src/Horacio-TLS-Lambda/Function.cs
+// Purpose: AWS Lambda handler implementation (TLS + HTTP timing + waterfall)
+
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -219,8 +222,8 @@ public class Function
         context.Logger.LogLine($"TLS Revocation (computed): {revocationLabel}");
         context.Logger.LogLine($"TLS RevocationMode (input): {revocationMode} (allowed: NoCheck|Online|Offline)");
         context.Logger.LogLine($"TLS RevocationSoftFail (input): {revocationSoftFail} (allowed: true|false)");
-        var rootPool = BuildCertCollectionFromPem(input.CaRootPem, "caRootPem");
-        var intermediatePool = BuildCertCollectionFromPem(input.IntermediatePem, "intermediatePem");
+        var rootPool = BuildCertCollectionFromFlexibleInput(input.CaRootPem, "caRootPem");
+        var intermediatePool = BuildCertCollectionFromFlexibleInput(input.IntermediatePem, "intermediatePem");
 
         var t = new TimingCollector();
         var sw0 = Stopwatch.StartNew();
@@ -1107,6 +1110,90 @@ public class Function
         };
     }	
 
+private static X509Certificate2Collection? BuildCertCollectionFromFlexibleInput(string? input, string fieldName)
+{
+    if (string.IsNullOrWhiteSpace(input))
+        return null;
+
+    // 1) Normalize JSON-style escaped newlines and normalize line endings
+    var normalized = NormalizeEscapedNewlines(input.Trim());
+
+    // 2) If it already looks like PEM, use the existing PEM parser (supports multiple certs)
+    if (normalized.Contains("-----BEGIN CERTIFICATE-----", StringComparison.OrdinalIgnoreCase))
+        return BuildCertCollectionFromPem(normalized, fieldName);
+
+    // 3) Otherwise, try Base64 (either DER cert, or base64-wrapped PEM text)
+    if (TryDecodeBase64(normalized, out var decoded))
+    {
+        // 3a) If decoded is actually PEM text, parse as PEM
+        try
+        {
+            var asText = System.Text.Encoding.UTF8.GetString(decoded);
+            asText = NormalizeEscapedNewlines(asText);
+
+            if (asText.Contains("-----BEGIN CERTIFICATE-----", StringComparison.OrdinalIgnoreCase))
+                return BuildCertCollectionFromPem(asText, fieldName);
+        }
+        catch
+        {
+            // ignore UTF8 decode failures; may be DER
+        }
+
+        // 3b) Treat as DER. Allow multiple DER certs by attempting single-cert parse first.
+        try
+        {
+            var col = new X509Certificate2Collection();
+            col.Add(new X509Certificate2(decoded));
+            return col;
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException(
+                $"Field '{fieldName}' looks like base64, but it is neither PEM text nor a DER X.509 certificate. {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    // 4) Not PEM, not Base64: reject with a clear message
+    throw new ArgumentException(
+        $"Field '{fieldName}' must be one of: PEM text, PEM text with escaped newlines (\\\\n), or base64-encoded DER/PEM.");
+}
+
+private static string NormalizeEscapedNewlines(string s)
+{
+    // Convert escaped sequences (common when JSON/envvars contain PEM)
+    s = s.Replace("\\r\\n", "\n", StringComparison.Ordinal)
+         .Replace("\\n", "\n", StringComparison.Ordinal)
+         .Replace("\\r", "\n", StringComparison.Ordinal);
+
+    // Normalize real newlines too
+    s = s.Replace("\r\n", "\n", StringComparison.Ordinal)
+         .Replace("\r", "\n", StringComparison.Ordinal);
+
+    return s;
+}
+
+private static bool TryDecodeBase64(string s, out byte[] decoded)
+{
+    decoded = Array.Empty<byte>();
+
+    // Remove whitespace to tolerate wrapped base64
+    var compact = new string(s.Where(c => !char.IsWhiteSpace(c)).ToArray());
+    if (compact.Length < 16)
+        return false;
+
+    // Some inputs may be "-----BEGIN..." already handled above.
+    // Here we only try base64 decode.
+    try
+    {
+        decoded = Convert.FromBase64String(compact);
+        return decoded.Length > 0;
+    }
+    catch
+    {
+        decoded = Array.Empty<byte>();
+        return false;
+    }
+}
 
     private static X509Certificate2Collection? BuildCertCollectionFromPem(string? pem, string fieldName)
     {

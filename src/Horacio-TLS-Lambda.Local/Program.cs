@@ -1,3 +1,6 @@
+// File: src/Horacio-TLS-Lambda.Local/Program.cs
+// Purpose: Local CLI runner for invoking the Lambda handler (supports flags)
+
 using System;
 using System.Collections.Generic;
 using System.IO;

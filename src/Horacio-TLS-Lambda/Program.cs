@@ -1,3 +1,6 @@
+// File: src/Horacio-TLS-Lambda/Program.cs
+// Purpose: Optional console runner inside the Lambda project (debug harness)
+
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;

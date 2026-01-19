@@ -195,6 +195,26 @@ dotnet lambda invoke-function Horacio-TLS-Lambda --payload '{
 }'
 ```
 
+Notes:
+- The Lambda will auto-detect if the string is PEM vs Base64
+- Base64 supports both DER certificates and full PEM text encoded as Base64
+
+---
+
+### Full input example (private CA using Base64)
+
+If your CA bundle is hard to embed into JSON (because of line breaks), you can provide it as **Base64**:
+
+```bash
+dotnet lambda invoke-function Horacio-TLS-Lambda --payload '{
+  "url": "https://your-private-endpoint.example.local/api/health",
+  "method": "GET",
+  "timeoutMs": 15000,
+  "caRootPem": "<BASE64_ENCODED_CA_PEM_OR_DER>",
+  "intermediatePem": "<BASE64_ENCODED_INTERMEDIATE_PEM_OR_DER>"
+}'
+```
+
 ---
 
 ## Input parameters
@@ -216,6 +236,20 @@ Important notes:
 - `caRootPem` and `intermediatePem` can contain **one or multiple PEM certificates concatenated**
 - If `caRootPem` is **not** provided, default OS validation is used
 - If the endpoint uses a private CA, you normally must provide `caRootPem`
+
+### Certificate input formats (PEM or Base64)
+
+The fields `caRootPem` and `intermediatePem` accept **multiple input formats**:
+
+✅ **PEM text** (one or more concatenated certificates)  
+✅ **PEM text with escaped newlines** (`\n`) for JSON compatibility  
+✅ **Base64-encoded DER certificate**  
+✅ **Base64-encoded PEM text** (the full PEM string encoded as base64)
+
+This makes it easier to pass certificates using:
+- JSON payloads (Lambda Test Tool / CLI)
+- environment variables
+- CI/CD pipelines
 
 ---
 
@@ -330,6 +364,12 @@ dotnet lambda-test-tool-8.0
 ```
 
 Then open the local URL shown in the terminal and invoke using a JSON payload like:
+```md
+Tip: If you paste multi-line PEM blocks into the Lambda Test Tool JSON input, it will fail JSON parsing.
+Use either:
+- escaped PEM strings (`\n`)
+- or Base64 input (recommended for long certs)
+```
 
 ```json
 {
