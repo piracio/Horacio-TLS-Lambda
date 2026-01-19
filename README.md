@@ -453,6 +453,24 @@ Useful scripts:
 - `pem_to_base64.*` → base64-encodes the PEM text (easy to embed into JSON payloads)
 - `pki_gen.*` → generates a lab Root CA + Intermediate CA + Server cert for testing
 
+## Windows PowerShell note (ExecutionPolicy / unsigned scripts)
+
+If you run PowerShell helper scripts from `tools/powershell/` and you get an error like:
+
+> "cannot be loaded... is not digitally signed"
+
+This usually happens because Windows marked the `.ps1` file as coming from the Internet
+(Zone.Identifier / Mark-of-the-Web). Even if your ExecutionPolicy is `RemoteSigned`,
+PowerShell will still block these scripts until you **unblock** them.
+
+### Fix (recommended): Unblock the scripts
+
+From the repository root:
+
+```powershell
+Get-ChildItem .\tools\powershell\*.ps1 | Unblock-File
+```
+
 ---
 
 ## Troubleshooting
