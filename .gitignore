@@ -52,3 +52,25 @@ coverage.xml
 *.swp
 *.bak
 *.orig
+
+# --- PKI / certificate generation outputs (tools/) ---
+out-pki/
+out-pki-*/
+**/out-pki/
+**/out-pki-*/
+
+# Private keys and cert artifacts
+*.key
+*.pem
+*.crt
+*.cer
+*.pfx
+*.p12
+*.csr
+*.crl
+*.srl
+*.der
+
+# OpenSSL / PKI temp files
+*.cnf
+*.ext
