@@ -440,6 +440,21 @@ HoracioTLSLambda::HoracioTLSLambda.Function::FunctionHandler
 
 ---
 
+## Tools (helpers)
+
+This repository includes helper scripts under `tools/`:
+
+- `tools/nix/` (macOS/Linux)
+- `tools/powershell/` (PowerShell)
+
+Useful scripts:
+
+- `pem_to_json.*` → converts a PEM file to a JSON-safe one-line string (`\n` escaped)
+- `pem_to_base64.*` → base64-encodes the PEM text (easy to embed into JSON payloads)
+- `pki_gen.*` → generates a lab Root CA + Intermediate CA + Server cert for testing
+
+---
+
 ## Troubleshooting
 
 ### TLS fails with private CA
